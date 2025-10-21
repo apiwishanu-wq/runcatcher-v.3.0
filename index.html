@@ -62,8 +62,8 @@
             this.motionDetection = false;
             this.previousFaces = [];
             this.photoCount = 0;
-            this.motionThreshold = 80; // px/s
-            this.captureCooldown = 2000; // ms
+            this.motionThreshold = 300; // px/s - much higher = less sensitive
+            this.captureCooldown = 5000; // ms - much longer cooldown
             this.lastCaptureTime = 0;
             this.currentMotionSpeed = 0;
 
@@ -284,6 +284,8 @@
                 return;
             }
             const now = dets.map(x => x.detection.box);
+            
+            // Calculate motion speed with smoothing
             const speeds = now.map(b => {
                 let best = Infinity;
                 this.previousFaces.forEach(pb => {
@@ -292,11 +294,15 @@
                 });
                 return best * 60; // approx px/s from per-frame delta at ~60fps
             });
-            this.currentMotionSpeed = speeds.length ? (speeds.reduce((a,b)=>a+b,0)/speeds.length) : 0;
+            
+            // Smooth the motion speed to reduce noise
+            const avgSpeed = speeds.length ? (speeds.reduce((a,b)=>a+b,0)/speeds.length) : 0;
+            this.currentMotionSpeed = this.currentMotionSpeed * 0.7 + avgSpeed * 0.3; // Smoothing factor
+            
             this.motionSpeed.textContent = this.currentMotionSpeed.toFixed(2);
             this.previousFaces = now;
 
-            // Auto-capture when running motion is detected
+            // Only auto-capture for sustained high motion (less sensitive)
             if (this.currentMotionSpeed > this.motionThreshold) {
                 this.captureAuto();
             }
