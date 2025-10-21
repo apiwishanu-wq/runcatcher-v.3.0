@@ -62,10 +62,11 @@
             this.motionDetection = false;
             this.previousFaces = [];
             this.photoCount = 0;
-            this.motionThreshold = 300; // px/s - much higher = less sensitive
-            this.captureCooldown = 5000; // ms - much longer cooldown
+            this.motionThreshold = 800; // px/s - VERY high = barely sensitive
+            this.captureCooldown = 10000; // ms - 10 second cooldown
             this.lastCaptureTime = 0;
             this.currentMotionSpeed = 0;
+            this.highMotionStartTime = 0; // Track when high motion started
 
             this.init();
         }
@@ -295,21 +296,67 @@
                 return best * 60; // approx px/s from per-frame delta at ~60fps
             });
             
-            // Smooth the motion speed to reduce noise
+            // HEAVY smoothing to reduce noise - much less sensitive
             const avgSpeed = speeds.length ? (speeds.reduce((a,b)=>a+b,0)/speeds.length) : 0;
-            this.currentMotionSpeed = this.currentMotionSpeed * 0.7 + avgSpeed * 0.3; // Smoothing factor
+            this.currentMotionSpeed = this.currentMotionSpeed * 0.9 + avgSpeed * 0.1; // HEAVY smoothing
             
             this.motionSpeed.textContent = this.currentMotionSpeed.toFixed(2);
             this.previousFaces = now;
 
-            // Only auto-capture for sustained high motion (less sensitive)
+            // Only auto-capture for sustained high motion (MUCH less sensitive)
             if (this.currentMotionSpeed > this.motionThreshold) {
-                this.captureAuto();
+                const now = Date.now();
+                if (this.highMotionStartTime === 0) {
+                    this.highMotionStartTime = now; // Start timing high motion
+                }
+                // Require 2 seconds of sustained high motion before capturing
+                if (now - this.highMotionStartTime > 2000) {
+                    this.captureAuto();
+                    this.highMotionStartTime = 0; // Reset
+                }
+            } else {
+                this.highMotionStartTime = 0; // Reset if motion drops
             }
         }
 
         center(b){ return { x: b.x + b.width/2, y: b.y + b.height/2 }; }
         dist(a,b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+        
+        drawSquaresOnCanvas(ctx, width, height, label) {
+            // Draw corner squares on the captured photo
+            const cornerSize = 30;
+            const lineWidth = 4;
+            const isAuto = label === 'Auto';
+            
+            // Set color based on capture type
+            ctx.strokeStyle = isAuto ? '#e74c3c' : '#c0392b';
+            ctx.fillStyle = isAuto ? '#e74c3c' : '#c0392b';
+            ctx.lineWidth = lineWidth;
+            
+            // Top-left corner
+            ctx.fillRect(10, 10, cornerSize, lineWidth);
+            ctx.fillRect(10, 10, lineWidth, cornerSize);
+            
+            // Top-right corner
+            ctx.fillRect(width - cornerSize - 10, 10, cornerSize, lineWidth);
+            ctx.fillRect(width - lineWidth - 10, 10, lineWidth, cornerSize);
+            
+            // Bottom-left corner
+            ctx.fillRect(10, height - cornerSize - 10, cornerSize, lineWidth);
+            ctx.fillRect(10, height - lineWidth - 10, lineWidth, cornerSize);
+            
+            // Bottom-right corner
+            ctx.fillRect(width - cornerSize - 10, height - cornerSize - 10, cornerSize, lineWidth);
+            ctx.fillRect(width - lineWidth - 10, height - lineWidth - 10, lineWidth, cornerSize);
+            
+            // Add capture info text
+            ctx.fillStyle = isAuto ? '#e74c3c' : '#c0392b';
+            ctx.font = 'bold 24px Arial';
+            ctx.fillText(`${label} Capture`, 20, 40);
+            ctx.font = '18px Arial';
+            ctx.fillText(`Motion: ${this.currentMotionSpeed.toFixed(2)} px/s`, 20, 65);
+            ctx.fillText(new Date().toLocaleTimeString(), 20, height - 20);
+        }
 
         captureManual(){ this.capture('Manual'); }
         captureAuto(){
@@ -329,6 +376,10 @@
             const x = c.getContext('2d');
             c.width = this.video.videoWidth; c.height = this.video.videoHeight;
             x.drawImage(this.video, 0, 0, c.width, c.height);
+            
+            // Add square corner markers to the captured photo
+            this.drawSquaresOnCanvas(x, c.width, c.height, label);
+            
             const url = c.toDataURL('image/jpeg', 0.85);
             const item = document.createElement('div');
             item.className = 'runner-item';
