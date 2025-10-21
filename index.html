@@ -296,7 +296,10 @@
             this.motionSpeed.textContent = this.currentMotionSpeed.toFixed(2);
             this.previousFaces = now;
 
-            if (this.currentMotionSpeed > this.motionThreshold) this.captureAuto();
+            // Auto-capture when running motion is detected
+            if (this.currentMotionSpeed > this.motionThreshold) {
+                this.captureAuto();
+            }
         }
 
         center(b){ return { x: b.x + b.width/2, y: b.y + b.height/2 }; }
@@ -305,9 +308,13 @@
         captureManual(){ this.capture('Manual'); }
         captureAuto(){
             const now = Date.now();
-            if (now - this.lastCaptureTime < this.captureCooldown) return;
+            if (now - this.lastCaptureTime < this.captureCooldown) {
+                console.log('Auto-capture skipped (cooldown)');
+                return;
+            }
             this.lastCaptureTime = now;
             this.capture('Auto');
+            console.log('Auto-captured due to running motion!');
         }
 
         capture(label){
@@ -322,12 +329,29 @@
             item.innerHTML = `
                 <div class="runner-number">${label} #${this.photoCount}</div>
                 <img src="${url}" class="runner-image" alt="Capture ${this.photoCount}">
-                <div class="runner-info">${new Date().toLocaleTimeString()}</div>
+                <div class="runner-info">
+                    <div>Type: ${label}</div>
+                    <div>Motion: ${this.currentMotionSpeed.toFixed(2)} px/s</div>
+                    <div>Time: ${new Date().toLocaleTimeString()}</div>
+                </div>
             `;
             const empty = this.runnersList.querySelector('.no-runners');
             if (empty) empty.remove();
             this.runnersList.insertBefore(item, this.runnersList.firstChild);
-            this.status.textContent = `${label} captured`;
+            
+            // Show capture notification
+            if (label === 'Auto') {
+                this.status.textContent = `🏃‍♂️ AUTO-CAPTURED! Motion: ${this.currentMotionSpeed.toFixed(2)} px/s`;
+                // Flash the motion status
+                this.motionStatus.style.color = '#e74c3c';
+                this.motionStatus.style.fontWeight = 'bold';
+                setTimeout(() => {
+                    this.motionStatus.style.color = '';
+                    this.motionStatus.style.fontWeight = '';
+                }, 2000);
+            } else {
+                this.status.textContent = `📸 ${label} captured #${this.photoCount}`;
+            }
         }
     }
 
