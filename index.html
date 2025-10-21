@@ -185,7 +185,12 @@
         async initCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+                    video: { 
+                        width: { ideal: 1280, min: 640 }, 
+                        height: { ideal: 720, min: 480 }, 
+                        facingMode: 'user',
+                        frameRate: { ideal: 30, max: 60 }
+                    }
                 });
                 this.video.srcObject = stream;
                 this.video.onloadedmetadata = () => {
@@ -229,9 +234,26 @@
             try {
                 let detections = [];
                 if (this.faceApiLoaded) {
-                    detections = await faceapi
-                        .detectAllFaces(this.video, new faceapi.TinyFaceDetectorOptions())
-                        .withFaceLandmarks();
+                    // Try multiple detection methods for better face detection
+                    const options1 = new faceapi.TinyFaceDetectorOptions({
+                        inputSize: 320,        // Smaller input = faster, more faces
+                        scoreThreshold: 0.3     // Lower threshold = detect more faces
+                    });
+                    
+                    const options2 = new faceapi.TinyFaceDetectorOptions({
+                        inputSize: 224,        // Even smaller for distant faces
+                        scoreThreshold: 0.2     // Even lower threshold
+                    });
+                    
+                    // Try both detection methods and combine results
+                    const [detections1, detections2] = await Promise.all([
+                        faceapi.detectAllFaces(this.video, options1).withFaceLandmarks(),
+                        faceapi.detectAllFaces(this.video, options2).withFaceLandmarks()
+                    ]);
+                    
+                    // Combine and deduplicate detections
+                    const allDetections = [...detections1, ...detections2];
+                    detections = this.removeDuplicateFaces(allDetections);
                 }
                 this.drawBoxes(detections);
                 if (this.motionDetection && detections.length) {
@@ -322,10 +344,35 @@
         center(b){ return { x: b.x + b.width/2, y: b.y + b.height/2 }; }
         dist(a,b){ return Math.hypot(a.x - b.x, a.y - b.y); }
         
-        drawSquaresOnCanvas(ctx, width, height, label) {
+        removeDuplicateFaces(detections) {
+            // Remove duplicate face detections that are too close together
+            const uniqueDetections = [];
+            const minDistance = 50; // Minimum distance between faces
+            
+            for (const detection of detections) {
+                const center = this.center(detection.detection.box);
+                let isDuplicate = false;
+                
+                for (const existing of uniqueDetections) {
+                    const existingCenter = this.center(existing.detection.box);
+                    if (this.dist(center, existingCenter) < minDistance) {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+                
+                if (!isDuplicate) {
+                    uniqueDetections.push(detection);
+                }
+            }
+            
+            return uniqueDetections;
+        }
+        
+        drawSquaresOnCanvas(ctx, width, height, label, scale = 1) {
             // Draw corner squares on the captured photo
-            const cornerSize = 30;
-            const lineWidth = 4;
+            const cornerSize = 30 * scale;
+            const lineWidth = 4 * scale;
             const isAuto = label === 'Auto';
             
             // Set color based on capture type
@@ -351,11 +398,11 @@
             
             // Add capture info text
             ctx.fillStyle = isAuto ? '#e74c3c' : '#c0392b';
-            ctx.font = 'bold 24px Arial';
-            ctx.fillText(`${label} Capture`, 20, 40);
-            ctx.font = '18px Arial';
-            ctx.fillText(`Motion: ${this.currentMotionSpeed.toFixed(2)} px/s`, 20, 65);
-            ctx.fillText(new Date().toLocaleTimeString(), 20, height - 20);
+            ctx.font = `bold ${24 * scale}px Arial`;
+            ctx.fillText(`${label} Capture`, 20 * scale, 40 * scale);
+            ctx.font = `${18 * scale}px Arial`;
+            ctx.fillText(`Motion: ${this.currentMotionSpeed.toFixed(2)} px/s`, 20 * scale, 65 * scale);
+            ctx.fillText(new Date().toLocaleTimeString(), 20 * scale, height - 20 * scale);
         }
 
         captureManual(){ this.capture('Manual'); }
@@ -374,13 +421,24 @@
             this.photoCount++;
             const c = document.createElement('canvas');
             const x = c.getContext('2d');
-            c.width = this.video.videoWidth; c.height = this.video.videoHeight;
+            
+            // Use higher resolution for better quality
+            const scale = 2; // 2x resolution for sharper images
+            c.width = this.video.videoWidth * scale;
+            c.height = this.video.videoHeight * scale;
+            
+            // Enable image smoothing for better quality
+            x.imageSmoothingEnabled = true;
+            x.imageSmoothingQuality = 'high';
+            
+            // Draw video at higher resolution
             x.drawImage(this.video, 0, 0, c.width, c.height);
             
             // Add square corner markers to the captured photo
-            this.drawSquaresOnCanvas(x, c.width, c.height, label);
+            this.drawSquaresOnCanvas(x, c.width, c.height, label, scale);
             
-            const url = c.toDataURL('image/jpeg', 0.85);
+            // Use higher quality JPEG compression
+            const url = c.toDataURL('image/jpeg', 0.95);
             const item = document.createElement('div');
             item.className = 'runner-item';
             item.innerHTML = `
