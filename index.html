@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RunCatcher - Hybrid</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>RunCatcher</h1>
+            <p>Face detection + manual capture with motion auto-capture</p>
+        </header>
+
+        <div class="main-content">
+            <div class="video-section">
+                <div class="video-container">
+                    <video id="video" autoplay muted playsinline></video>
+                    <canvas id="canvas" width="640" height="480"></canvas>
+                </div>
+                <div class="controls">
+                    <button id="startBtn" class="btn btn-primary">Start</button>
+                    <button id="stopBtn" class="btn btn-secondary" disabled>Stop</button>
+                    <button id="captureBtn" class="btn btn-primary" disabled>Capture</button>
+                    <button id="motionBtn" class="btn btn-secondary" disabled>Toggle Motion</button>
+                    <div class="status"><span id="status">Ready</span></div>
+                    <div class="motion-info">
+                        <div>Motion: <span id="motionSpeed">0</span> px/s</div>
+                        <div>Auto-Capture: <span id="motionStatus">Off</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="runners-section">
+                <h2>Captures</h2>
+                <div id="runnersList" class="runners-list">
+                    <p class="no-runners">No captures yet</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script>
+    class RunCatcherHybrid {
+        constructor() {
+            this.video = document.getElementById('video');
+            this.canvas = document.getElementById('canvas');
+            this.ctx = this.canvas.getContext('2d');
+            this.startBtn = document.getElementById('startBtn');
+            this.stopBtn = document.getElementById('stopBtn');
+            this.captureBtn = document.getElementById('captureBtn');
+            this.motionBtn = document.getElementById('motionBtn');
+            this.status = document.getElementById('status');
+            this.motionStatus = document.getElementById('motionStatus');
+            this.motionSpeed = document.getElementById('motionSpeed');
+            this.runnersList = document.getElementById('runnersList');
+
+            this.isRunning = false;
+            this.faceApiLoaded = false;
+            this.motionDetection = false;
+            this.previousFaces = [];
+            this.photoCount = 0;
+            this.motionThreshold = 80; // px/s
+            this.captureCooldown = 2000; // ms
+            this.lastCaptureTime = 0;
+            this.currentMotionSpeed = 0;
+
+            this.init();
+        }
+
+        async init() {
+            this.bind();
+            await this.loadModels();
+            await this.initCamera();
+        }
+
+        bind() {
+            this.startBtn.addEventListener('click', () => this.start());
+            this.stopBtn.addEventListener('click', () => this.stop());
+            this.captureBtn.addEventListener('click', () => this.captureManual());
+            this.motionBtn.addEventListener('click', () => this.toggleMotion());
+        }
+
+        async loadModels() {
+            try {
+                this.status.textContent = 'Loading models...';
+                const urls = [
+                    'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights',
+                    'https://unpkg.com/face-api.js@0.22.2/weights',
+                    'https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/weights'
+                ];
+                let ok = false;
+                for (const u of urls) {
+                    try {
+                        await Promise.all([
+                            faceapi.nets.tinyFaceDetector.loadFromUri(u),
+                            faceapi.nets.faceLandmark68Net.loadFromUri(u)
+                        ]);
+                        ok = true; break;
+                    } catch (_) {}
+                }
+                if (!ok) throw new Error('model load failed');
+                this.faceApiLoaded = true;
+                this.status.textContent = 'Models loaded. Ready';
+                this.startBtn.disabled = false;
+            } catch (e) {
+                console.warn('Model load failed, manual only');
+                this.status.textContent = 'Model load failed. Manual capture works';
+                this.startBtn.disabled = false;
+                this.captureBtn.disabled = false;
+            }
+        }
+
+        async initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+                });
+                this.video.srcObject = stream;
+                this.video.onloadedmetadata = () => {
+                    this.canvas.width = this.video.videoWidth;
+                    this.canvas.height = this.video.videoHeight;
+                };
+            } catch (e) {
+                this.status.textContent = 'Camera error';
+            }
+        }
+
+        start() {
+            this.isRunning = true;
+            this.startBtn.disabled = true;
+            this.stopBtn.disabled = false;
+            this.captureBtn.disabled = false;
+            this.motionBtn.disabled = !this.faceApiLoaded;
+            this.status.textContent = 'Detecting...';
+            this.loop();
+        }
+
+        stop() {
+            this.isRunning = false;
+            this.startBtn.disabled = false;
+            this.stopBtn.disabled = true;
+            this.motionBtn.disabled = true;
+            this.status.textContent = 'Stopped';
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.motionStatus.textContent = 'Off';
+            this.motionSpeed.textContent = '0';
+        }
+
+        toggleMotion() {
+            this.motionDetection = !this.motionDetection;
+            this.motionStatus.textContent = this.motionDetection ? 'On' : 'Off';
+            this.motionBtn.textContent = this.motionDetection ? 'Stop Motion' : 'Toggle Motion';
+        }
+
+        async loop() {
+            if (!this.isRunning) return;
+            try {
+                let detections = [];
+                if (this.faceApiLoaded) {
+                    detections = await faceapi
+                        .detectAllFaces(this.video, new faceapi.TinyFaceDetectorOptions())
+                        .withFaceLandmarks();
+                }
+                this.drawBoxes(detections);
+                if (this.motionDetection && detections.length) {
+                    this.updateMotion(detections);
+                }
+            } catch (e) {}
+            requestAnimationFrame(() => this.loop());
+        }
+
+        drawBoxes(detections) {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            detections.forEach((d, i) => {
+                const b = d.detection.box;
+                const running = this.motionDetection && this.currentMotionSpeed > this.motionThreshold;
+                
+                // Draw main bounding box
+                this.ctx.strokeStyle = running ? '#e74c3c' : '#c0392b';
+                this.ctx.lineWidth = 3;
+                this.ctx.strokeRect(b.x, b.y, b.width, b.height);
+                
+                // Draw corner squares
+                const cornerSize = 20;
+                this.ctx.fillStyle = running ? '#e74c3c' : '#c0392b';
+                
+                // Top-left corner
+                this.ctx.fillRect(b.x - 2, b.y - 2, cornerSize, 4);
+                this.ctx.fillRect(b.x - 2, b.y - 2, 4, cornerSize);
+                
+                // Top-right corner
+                this.ctx.fillRect(b.x + b.width - cornerSize + 2, b.y - 2, cornerSize, 4);
+                this.ctx.fillRect(b.x + b.width - 2, b.y - 2, 4, cornerSize);
+                
+                // Bottom-left corner
+                this.ctx.fillRect(b.x - 2, b.y + b.height - cornerSize + 2, cornerSize, 4);
+                this.ctx.fillRect(b.x - 2, b.y + b.height - 2, 4, cornerSize);
+                
+                // Bottom-right corner
+                this.ctx.fillRect(b.x + b.width - cornerSize + 2, b.y + b.height - 2, cornerSize, 4);
+                this.ctx.fillRect(b.x + b.width - 2, b.y + b.height - cornerSize + 2, 4, cornerSize);
+                
+                // Draw label
+                this.ctx.fillStyle = running ? '#e74c3c' : '#c0392b';
+                this.ctx.font = '16px Arial';
+                this.ctx.fillText(running ? 'RUNNING!' : `Face ${i+1}`, b.x, b.y - 10);
+            });
+        }
+
+        updateMotion(dets) {
+            if (this.previousFaces.length === 0) {
+                this.previousFaces = dets.map(x => x.detection.box);
+                return;
+            }
+            const now = dets.map(x => x.detection.box);
+            const speeds = now.map(b => {
+                let best = Infinity;
+                this.previousFaces.forEach(pb => {
+                    const d = this.dist(this.center(b), this.center(pb));
+                    if (d < best) best = d;
+                });
+                return best * 60; // approx px/s from per-frame delta at ~60fps
+            });
+            this.currentMotionSpeed = speeds.length ? (speeds.reduce((a,b)=>a+b,0)/speeds.length) : 0;
+            this.motionSpeed.textContent = this.currentMotionSpeed.toFixed(2);
+            this.previousFaces = now;
+
+            if (this.currentMotionSpeed > this.motionThreshold) this.captureAuto();
+        }
+
+        center(b){ return { x: b.x + b.width/2, y: b.y + b.height/2 }; }
+        dist(a,b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+
+        captureManual(){ this.capture('Manual'); }
+        captureAuto(){
+            const now = Date.now();
+            if (now - this.lastCaptureTime < this.captureCooldown) return;
+            this.lastCaptureTime = now;
+            this.capture('Auto');
+        }
+
+        capture(label){
+            this.photoCount++;
+            const c = document.createElement('canvas');
+            const x = c.getContext('2d');
+            c.width = this.video.videoWidth; c.height = this.video.videoHeight;
+            x.drawImage(this.video, 0, 0, c.width, c.height);
+            const url = c.toDataURL('image/jpeg', 0.85);
+            const item = document.createElement('div');
+            item.className = 'runner-item';
+            item.innerHTML = `
+                <div class="runner-number">${label} #${this.photoCount}</div>
+                <img src="${url}" class="runner-image" alt="Capture ${this.photoCount}">
+                <div class="runner-info">${new Date().toLocaleTimeString()}</div>
+            `;
+            const empty = this.runnersList.querySelector('.no-runners');
+            if (empty) empty.remove();
+            this.runnersList.insertBefore(item, this.runnersList.firstChild);
+            this.status.textContent = `${label} captured`;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => new RunCatcherHybrid());
+    </script>
+</body>
+</html>
