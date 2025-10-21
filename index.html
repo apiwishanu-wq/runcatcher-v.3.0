@@ -85,32 +85,100 @@
 
         async loadModels() {
             try {
-                this.status.textContent = 'Loading models...';
-                const urls = [
+                this.status.textContent = 'Loading face detection models...';
+                
+                // Try multiple CDN sources with timeout
+                const modelUrls = [
                     'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights',
                     'https://unpkg.com/face-api.js@0.22.2/weights',
-                    'https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/weights'
+                    'https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/weights',
+                    'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'
                 ];
-                let ok = false;
-                for (const u of urls) {
+                
+                let modelsLoaded = false;
+                let lastError = null;
+                
+                for (const baseUrl of modelUrls) {
                     try {
-                        await Promise.all([
-                            faceapi.nets.tinyFaceDetector.loadFromUri(u),
-                            faceapi.nets.faceLandmark68Net.loadFromUri(u)
+                        console.log(`Trying to load models from: ${baseUrl}`);
+                        
+                        // Add timeout to prevent hanging
+                        const loadPromise = Promise.all([
+                            faceapi.nets.tinyFaceDetector.loadFromUri(baseUrl),
+                            faceapi.nets.faceLandmark68Net.loadFromUri(baseUrl)
                         ]);
-                        ok = true; break;
-                    } catch (_) {}
+                        
+                        const timeoutPromise = new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Timeout')), 10000)
+                        );
+                        
+                        await Promise.race([loadPromise, timeoutPromise]);
+                        
+                        modelsLoaded = true;
+                        console.log('Models loaded successfully from:', baseUrl);
+                        break;
+                        
+                    } catch (error) {
+                        console.warn(`Failed to load from ${baseUrl}:`, error.message);
+                        lastError = error;
+                        continue;
+                    }
                 }
-                if (!ok) throw new Error('model load failed');
-                this.faceApiLoaded = true;
-                this.status.textContent = 'Models loaded. Ready';
-                this.startBtn.disabled = false;
-            } catch (e) {
-                console.warn('Model load failed, manual only');
-                this.status.textContent = 'Model load failed. Manual capture works';
+                
+                if (modelsLoaded) {
+                    this.faceApiLoaded = true;
+                    this.status.textContent = 'Models loaded. Ready to start detection.';
+                    this.startBtn.disabled = false;
+                } else {
+                    // Try fallback with just basic model
+                    this.status.textContent = 'Trying fallback model...';
+                    try {
+                        await faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
+                        this.faceApiLoaded = true;
+                        this.status.textContent = 'Basic model loaded. Ready to start detection.';
+                        this.startBtn.disabled = false;
+                    } catch (fallbackError) {
+                        throw new Error('All model sources failed');
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Model loading failed:', error);
+                this.status.textContent = 'Face detection unavailable. Manual capture still works.';
                 this.startBtn.disabled = false;
                 this.captureBtn.disabled = false;
+                this.motionBtn.disabled = true;
+                
+                // Show helpful message
+                this.showModelError();
             }
+        }
+        
+        showModelError() {
+            const errorDiv = document.createElement('div');
+            errorDiv.style.cssText = `
+                background: #f8d7da; 
+                border: 1px solid #f5c6cb; 
+                color: #721c24; 
+                padding: 15px; 
+                margin: 10px 0; 
+                border-radius: 5px;
+                font-size: 14px;
+            `;
+            errorDiv.innerHTML = `
+                <strong>Face Detection Models Failed to Load</strong><br>
+                This usually happens due to:<br>
+                • Internet connection issues<br>
+                • CDN blocking or rate limiting<br>
+                • Browser security restrictions<br><br>
+                <strong>Solutions:</strong><br>
+                • Check your internet connection<br>
+                • Try refreshing the page<br>
+                • Disable ad blockers temporarily<br>
+                • Try a different browser<br><br>
+                <em>Manual capture still works without face detection!</em>
+            `;
+            document.querySelector('.video-section').appendChild(errorDiv);
         }
 
         async initCamera() {
